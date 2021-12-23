@@ -1,21 +1,22 @@
 {
-  "name": "twitch-plays-gather",
-  "version": "1.0.0",
+  "name": "gather-spaceapi",
+  "version": "1.0.1",
   "description": "",
   "main": "dist/index.js",
   "scripts": {
-    "start": "tsc -b && node dist/index.js"
+    "start": "tsc -b && node dist/index.js",
+    "debug": "tsc -b && node --inspect dist/index.js DEBUG"
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/gathertown/twitch-plays-gather.git"
+    "url": "git+https://github.com/ACKspace/gather-spaceapi.git"
   },
-  "author": "npfoss",
+  "author": "xopr",
   "license": "MIT",
   "bugs": {
-    "url": "https://github.com/gathertown/twitch-plays-gather/issues"
+    "url": "https://github.com/ACKspace/gather-spaceapi/issues"
   },
-  "homepage": "https://github.com/gathertown/twitch-plays-gather#readme",
+  "homepage": "https://github.com/ACKspace/gather-spaceapi",
   "dependencies": {
     "@gathertown/gather-game-client": "31.2.2",
     "isomorphic-ws": "^4.0.1",

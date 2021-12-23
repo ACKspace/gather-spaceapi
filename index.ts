@@ -14,14 +14,130 @@ const OPEN = "https://ackspace.nl/spaceAPI/ministate_open.png";
 const CLOSED = "https://ackspace.nl/spaceAPI/ministate_closed.png";
 const SPACEAPI_URL = "https://ackspace.nl/spaceAPI/";
 
+const DEBUG = process.argv.includes("DEBUG");
+const VERBOSE = process.argv.includes("VERBOSE");
+
 const game = new Game( () => Promise.resolve( { apiKey: API_KEY } ) );
+
 game.connect( SPACE_ID );
-//game.subscribeToConnection((connected) => console.log("connected?", connected));
+game.subscribeToConnection( (connected) => {
+	if ( VERBOSE )
+		console.log( "connected?", connected )
+} );
 
 let gather_map_objects: { [key: number]: WireObject } = {};
 let switchId:number|null = null;
 
-function setVirtualSpacestate( state:boolean|null )
+function findObject( objId:string ):WireObject|null
+{
+	// I guess this is a sparse array,
+	// so we have the downsides of an object
+	// and the downsides of an array
+	const key = Object.keys( gather_map_objects ).find( ( key ) => {
+		const currentObject = gather_map_objects[ parseInt( key ) ];
+
+		if ( key === objId )
+			console.warn( "found index as id, this is unexpected" );
+
+		return currentObject.id === objId;
+	} ) || null;
+
+	if ( key !== null )
+		return gather_map_objects[ parseInt( key ) ];
+		
+	// Not found
+	if ( VERBOSE )
+	{
+		console.log( `id not found: ${objId}` );
+		if ( DEBUG )
+			console.log( "objects", gather_map_objects );
+	}
+
+	return null;
+}
+
+// Please note that the `customState` seemed to return lower case string; keep the enum lowercase for compatibility
+enum SwitchState
+{
+	On = "on",
+	Off = "off",
+	Unknown = "unknown",
+	Disabled = "disabled"
+}
+
+function invertState( state:SwitchState ): SwitchState
+{
+	switch ( state )
+	{
+		case SwitchState.On:
+			return SwitchState.Off;
+		case SwitchState.Off:
+			return SwitchState.On;
+
+		// SwitchState.Disabled
+		// SwitchState.Unknown
+		default:
+			console.warn( "Unexpected: inverting from unknown or disabled state" )
+			return SwitchState.On;
+	}
+}
+
+function switchStateToTernary( state:SwitchState ):boolean|null
+{
+	switch ( state )
+	{
+		case SwitchState.On:
+			return true;
+		case SwitchState.Off:
+			return false;
+
+		// SwitchState.Disabled
+		// SwitchState.Unknown
+		default:
+			return null;
+	}
+}
+
+function switchStateToImage( state:SwitchState ): string
+{
+	switch ( state )
+	{
+		case SwitchState.On:
+			return OPEN;
+		default:
+			return CLOSED
+	}
+}
+
+function switchStateToMessage( state:SwitchState ): string
+{
+	switch ( state )
+	{
+		case SwitchState.On:
+			return "Open! press x to close the space";
+		case SwitchState.Off:
+			return "Closed. press x to open the space"
+		case SwitchState.Unknown:
+			return "unknown state";
+		case SwitchState.Disabled:
+			return "Disabled (script not running)";
+	}
+}
+
+function ternaryToSwitchState( state:boolean|null ): SwitchState
+{
+	switch ( state )
+	{
+		case true:
+			return SwitchState.On;
+		case false:
+			return SwitchState.Off;
+		default:
+			return SwitchState.Unknown;
+	}
+}
+
+function setVirtualSpacestate( state:SwitchState )
 {
 	if ( switchId === null )
 	{
@@ -30,10 +146,15 @@ function setVirtualSpacestate( state:boolean|null )
 	}
 
 	const obj = gather_map_objects[ switchId ];
-	const oldstate = obj.customState === "on";
+	const oldstate = obj.customState as SwitchState;
 
 	if ( oldstate === state )
-		return;	
+		return;
+
+	if ( VERBOSE )
+		console.log( `set virtual spacestate (oldstate): ${state} (${oldstate})` );
+
+	const image = switchStateToImage( state );
 
 	game.engine.sendAction({
 		$case: "mapSetObjects",
@@ -43,10 +164,11 @@ function setVirtualSpacestate( state:boolean|null )
 				[switchId]: {
 					x: X,
 					y: Y,
-					normal: state ? OPEN : CLOSED,
-					highlighted: state ? OPEN : CLOSED,
-					customState: state ? "on" : "off",
-					previewMessage: state ? "Open! press x to close the space" : "Closed. press x to open the space",
+					normal: image,
+					highlighted: image,
+					customState: state as string,
+					previewMessage: switchStateToMessage( state ),
+					id: "spacestate",
 					_tags: [], // currently needed for this request to complete
 				},
 			},
@@ -55,21 +177,23 @@ function setVirtualSpacestate( state:boolean|null )
 
 }
 
-function setRealSpacestate( state:boolean )
+function setRealSpacestate( state: SwitchState )
 {
 	console.log( `setting real state (forced): ${state}`)
+
 	// -2:closed
 	// -1:open
 	// 0: closed
 	// 1: open
+	const spacestate = switchStateToTernary( state );
 
 	// Trigger faux spacestate to enable override
-	https.get( `${SPACEAPI_URL}?key=${SPACEAPI_KEY}&update=state&state=${state?0:1}` );
+	https.get( `${SPACEAPI_URL}?key=${SPACEAPI_KEY}&update=state&state=${spacestate?0:1}` );
 	// Override space state
-	https.get( `${SPACEAPI_URL}?key=${SPACEAPI_KEY}&update=state&state=${state?-1:-2}` );
+	https.get( `${SPACEAPI_URL}?key=${SPACEAPI_KEY}&update=state&state=${spacestate?-1:-2}` );
 }
 
-async function getRealSpacestate(): Promise<boolean|null>
+async function getSpaceAPIstate(): Promise<SwitchState>
 {
 	return new Promise((resolve) => {
 		https.get(SPACEAPI_URL,(res) => {
@@ -82,39 +206,55 @@ async function getRealSpacestate(): Promise<boolean|null>
 			res.on("end", () => {
 				try {
 					const json = JSON.parse( body );
-					// do something with JSON
-					resolve( json.state.open );
+					if ( VERBOSE )
+						console.log( `SpaceAPI spacestate: ${json.state.open}`)
+					resolve( ternaryToSwitchState( json.state.open ) );
 				} catch ( error: any )
 				{
 					console.error( error.message );
-					resolve( null );
+					resolve( SwitchState.Unknown );
 				};
 			});
 
-		}).on("error", (error) => {
-			console.error(error.message);
-			resolve( null );
+		}).on("error", ( error: Error ) => {
+			console.error( error.message );
+			resolve( SwitchState.Unknown );
 		});
 	} );
 }
 
 // Read real spacestate every 10 seconds
-setInterval( async () => {
-	const state = await getRealSpacestate( );
-	console.log( `spaceAPI spacestate: ${state}` );
+const intervalTimer = setInterval( async () => {
+	const state = await getSpaceAPIstate( );
 	setVirtualSpacestate( state );
 }, 10000 )
 
 // Object interaction
 game.subscribeToEvent("playerInteracts", (data, _context) => {
-	const objId = parseInt(data.playerInteracts.objId);
-	const obj = gather_map_objects[ objId ];
+	const objId = data.playerInteracts.objId;
+	const obj = findObject( objId );
 
-	if ( "customState" in obj && obj.id === `${switchId}` ) 
+	if ( VERBOSE )
 	{
-		const state = obj.customState === "on";
-		setVirtualSpacestate( !state );
-		setRealSpacestate( !state );
+		console.log( "interact event, id:", objId );
+		// invalid id?
+		if ( !objId )
+		{
+			console.log( "data", data );
+			console.log( "playerInteracts", data.playerInteracts );
+		}
+	}
+
+	// Note that the object id currently has no value to check for
+	if ( obj && ( "customState" in obj ) ) 
+	{
+		const state = invertState( obj.customState as SwitchState );
+		setVirtualSpacestate( state );
+		setRealSpacestate( state );
+	}
+	else if ( VERBOSE )
+	{
+		console.log( "object has no customState", obj );
 	}
 });
 
@@ -131,6 +271,14 @@ game.subscribeToEvent("mapSetObjects", (data, _context) =>
 			const obj = gather_map_objects[ key ];
 			if ( "customState" in obj )
 				switchId = key;
+
+			// Show all objects in DEBUG mode
+			if ( DEBUG && VERBOSE )
+			{
+				console.log( obj );
+				console.log( "=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=" );
+			}
+
 		}
 
 		if ( !switchId )
@@ -149,7 +297,7 @@ game.subscribeToEvent("mapSetObjects", (data, _context) =>
 				previewMessage: "press x to toggle space state",
 				normal: CLOSED,
 				highlighted: CLOSED,
-				customState: "off",
+				customState: SwitchState.Unknown,
 				_tags: [], // currently needed for this request to complete
 			};
 			gather_map_objects[ switchId! ] = spacestate;
@@ -163,12 +311,25 @@ game.subscribeToEvent("mapSetObjects", (data, _context) =>
 				},
 			});
 		}
+		else
+		{
+			if ( VERBOSE )
+				console.log( `switch id found (state): ${switchId} (${gather_map_objects[switchId].customState})` );
+			if ( DEBUG )
+				console.log( gather_map_objects[switchId] );
+
+		}
 	}
 
 } );
 
 // initialize
 setTimeout( () => {
+	if ( DEBUG )
+		console.log( "DEBUG mode");
+	if ( VERBOSE )
+		console.log( "VERBOSE mode");
+
 	console.log("initializing.. press ctrl+c to stop this script");
 	game.engine.sendAction({
 		$case: "setName",
@@ -176,6 +337,8 @@ setTimeout( () => {
 			name: "NPC:spacestate",
 		},
 	});
+	// Set unknown spacestate
+	setVirtualSpacestate( SwitchState.Unknown );
 }, 2000 ); // wait two seconds before setting these just to give the game a chance to init
 
 
@@ -183,29 +346,10 @@ setTimeout( () => {
 process.on('SIGINT', function()
 {
     console.log("Caught interrupt signal; cleaning up");
+	// Stop the timer and update the switch first
+	clearInterval( intervalTimer );
+	setVirtualSpacestate( SwitchState.Disabled );
 
-	// Update the switch first
-	if ( switchId !== null )
-	{
-		game.engine.sendAction({
-			$case: "mapSetObjects",
-			mapSetObjects: {
-				mapId: MAP_ID,
-				objects: {
-					[switchId]: {
-						x: X,
-						y: Y,
-						width: 1,
-						normal: CLOSED,
-						highlighted: CLOSED,
-						customState: "off",
-						previewMessage: "Disabled (script not running)",
-						_tags: [], // smh we're going to hopefully get rid of this soon but for now you just have to include it with setObject actions, sorry
-					},
-				},
-			},
-		});
-	}
 
 	game.engine.sendAction({
 		$case: "setName",
