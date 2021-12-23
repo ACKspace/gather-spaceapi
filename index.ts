@@ -29,6 +29,12 @@ function setVirtualSpacestate( state:boolean|null )
 		return;
 	}
 
+	const obj = gather_map_objects[ switchId ];
+	const oldstate = obj.customState === "on";
+
+	if ( oldstate === state )
+		return;	
+
 	game.engine.sendAction({
 		$case: "mapSetObjects",
 		mapSetObjects: {
@@ -51,7 +57,7 @@ function setVirtualSpacestate( state:boolean|null )
 
 function setRealSpacestate( state:boolean )
 {
-	console.log( `setting real state: ${state}`)
+	console.log( `setting real state (forced): ${state}`)
 	// -2:closed
 	// -1:open
 	// 0: closed
@@ -95,7 +101,7 @@ async function getRealSpacestate(): Promise<boolean|null>
 // Read real spacestate every 10 seconds
 setInterval( async () => {
 	const state = await getRealSpacestate( );
-	console.log( `Real state: ${state}` );
+	console.log( `spaceAPI spacestate: ${state}` );
 	setVirtualSpacestate( state );
 }, 10000 )
 
@@ -163,7 +169,7 @@ game.subscribeToEvent("mapSetObjects", (data, _context) =>
 
 // initialize
 setTimeout( () => {
-	console.log("setting name");
+	console.log("initializing.. press ctrl+c to stop this script");
 	game.engine.sendAction({
 		$case: "setName",
 		setName: {
@@ -176,19 +182,9 @@ setTimeout( () => {
 // Press ctrl+c to exit the script (and cleanup)
 process.on('SIGINT', function()
 {
-    console.log("Caught interrupt signal");
+    console.log("Caught interrupt signal; cleaning up");
 
-	// Trigger faux spacestate to release override
-	// assume the real switch is closed, 
-	https.get( `${SPACEAPI_URL}?key=${SPACEAPI_KEY}&update=state&state=1` );	
-
-	game.engine.sendAction({
-		$case: "setName",
-		setName: {
-			name: "xopr",
-		},
-	});
-
+	// Update the switch first
 	if ( switchId !== null )
 	{
 		game.engine.sendAction({
@@ -210,6 +206,17 @@ process.on('SIGINT', function()
 			},
 		});
 	}
+
+	game.engine.sendAction({
+		$case: "setName",
+		setName: {
+			name: "xopr",
+		},
+	});
+
+	// Trigger faux spacestate to release override
+	// assume the real switch is closed, 
+	https.get( `${SPACEAPI_URL}?key=${SPACEAPI_KEY}&update=state&state=1` );	
 
 	process.exit();
 });
