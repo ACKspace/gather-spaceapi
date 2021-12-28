@@ -81,8 +81,6 @@ game.subscribeToConnection( (connected) => {
 
 	if ( MQTT )
 		mqttBridge.init();
-
-
 } );
 
 interface RoomObjects { [key: number]: WireObject }
@@ -96,8 +94,8 @@ async function getMutex( _room: string, _timeout: number|undefined ): Promise<bo
 {
 	if ( _room in mutexRooms )
 	{
-		// Resolved, return true
-		return true;
+		// Mutex already defined, return it
+		return mutexRooms[ _room ];
 	}
 	else
 	{
@@ -231,9 +229,17 @@ game.subscribeToEvent( "mapSetObjects", (data, _context) =>
 	}
 
 	// Iterate all objects and handle object subscription
+	const ids: { [id: string]: number } = { };
 	Object.keys( roomObjects[ room ] ).find( ( key ) =>
 	{
-		const currentObject = roomObjects[ room ][ parseInt( key ) ];
+		const nkey = parseInt( key );
+		const currentObject = roomObjects[ room ][ nkey ];
+		if ( currentObject.id )
+		{
+			if ( currentObject.id in ids )
+				console.warn( `/!\\ duplicate id's for "${currentObject.id}" in ${room}: ${ids[ currentObject.id ]} and ${nkey}` );
+			ids[ currentObject.id ] = nkey;
+		}
 		if ( currentObject.id && subscribers[ currentObject.id ] )
 		{
 			if ( VERBOSE )

@@ -242,11 +242,12 @@ export class Spacestate extends EventObject
         if ( SPACESTATE )
         {
             // Trigger faux spacestate to enable override
-            https.get( `${SPACEAPI_URL}?key=${SPACEAPI_KEY}&update=state&state=${spacestate ? CLOSED : OPEN}`, (res) => {
-                res.on("end", () => {
-                    // Override space state (only after the first request has completed)
+            https.get( `${SPACEAPI_URL}?key=${SPACEAPI_KEY}&update=state&state=${spacestate ? CLOSED : OPEN}`, (res) =>
+            {
+                if ( res.statusCode === 200 )
                     https.get( `${SPACEAPI_URL}?key=${SPACEAPI_KEY}&update=state&state=${spacestate ? OPEN_LOCKED : CLOSED_LOCKED}` );
-                });
+            } ).on('error', ( e ) => {
+                console.error( e );
             } );
         }
     }
