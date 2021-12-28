@@ -1,366 +1,540 @@
-import { API_KEY, SPACEAPI_KEY } from "./api-key";
-import { Game, WireObject, MoveDirection } from "@gathertown/gather-game-client";
+const SPACE_ID = "iVeuxmC1wz9bpz3p\\ACKspace";
 
-import https from 'https';
+import { API_KEY } from "./api-key";
+import { Game, WireObject } from "@gathertown/gather-game-client";
+
+import { EventObject } from "./EventObject";
+import { Spacestate } from "./SpaceAPI";
 
 global.WebSocket = require("isomorphic-ws");
 
-const SPACE_ID = "iVeuxmC1wz9bpz3p\\ACKspace";
-const MAP_ID = "custom-entrance";
-const X = 30;
-const Y = 25;
-
-const OPEN = "https://ackspace.nl/spaceAPI/ministate_open.png";
-const CLOSED = "https://ackspace.nl/spaceAPI/ministate_closed.png";
-const SPACEAPI_URL = "https://ackspace.nl/spaceAPI/";
-
-const DEBUG = process.argv.includes("DEBUG");
-const VERBOSE = process.argv.includes("VERBOSE");
+// Flags
+const DEBUG = process.argv.includes( "--debug" );				// debug setting (object printing and feature testing)
+const VERBOSE = process.argv.includes( "--verbose" );			// verbose console output
+// Flags: feature disable options
+const READONLY = process.argv.includes( "--readonly" );			// "readonly" gather connection
+const SPACEAPI = !process.argv.includes( "--nospaceapi" );  	// don't initialize SpaceAPI module
+const CHANGE_NAME = !process.argv.includes( "--nonamechange" ); // don't touch our nickname
 
 const game = new Game( () => Promise.resolve( { apiKey: API_KEY } ) );
+const spacestate = new Spacestate();
 
-game.connect( SPACE_ID );
-game.subscribeToConnection( (connected) => {
-	if ( VERBOSE )
-		console.log( "connected?", connected )
-} );
+// Program initialization
+( () => {
+	console.log( new Date(), "init" );
 
-let gather_map_objects: { [key: number]: WireObject } = {};
-let switchId:number|null = null;
-
-function findObject( objId:string ):WireObject|null
-{
-	// I guess this is a sparse array,
-	// so we have the downsides of an object
-	// and the downsides of an array
-	const key = Object.keys( gather_map_objects ).find( ( key ) => {
-		const currentObject = gather_map_objects[ parseInt( key ) ];
-
-		if ( key === objId )
-			console.warn( "found index as id, this is unexpected" );
-
-		return currentObject.id === objId;
-	} ) || null;
-
-	if ( key !== null )
-		return gather_map_objects[ parseInt( key ) ];
-		
-	// Not found
-	if ( VERBOSE )
-	{
-		console.log( `id not found: ${objId}` );
-		if ( DEBUG )
-			console.log( "objects", gather_map_objects );
-	}
-
-	return null;
-}
-
-// Please note that the `customState` seemed to return lower case string; keep the enum lowercase for compatibility
-enum SwitchState
-{
-	On = "on",
-	Off = "off",
-	Unknown = "unknown",
-	Disabled = "disabled"
-}
-
-function invertState( state:SwitchState ): SwitchState
-{
-	switch ( state )
-	{
-		case SwitchState.On:
-			return SwitchState.Off;
-		case SwitchState.Off:
-			return SwitchState.On;
-
-		// SwitchState.Disabled
-		// SwitchState.Unknown
-		default:
-			console.warn( "Unexpected: inverting from unknown or disabled state" )
-			return SwitchState.On;
-	}
-}
-
-function switchStateToTernary( state:SwitchState ):boolean|null
-{
-	switch ( state )
-	{
-		case SwitchState.On:
-			return true;
-		case SwitchState.Off:
-			return false;
-
-		// SwitchState.Disabled
-		// SwitchState.Unknown
-		default:
-			return null;
-	}
-}
-
-function switchStateToImage( state:SwitchState ): string
-{
-	switch ( state )
-	{
-		case SwitchState.On:
-			return OPEN;
-		default:
-			return CLOSED
-	}
-}
-
-function switchStateToMessage( state:SwitchState ): string
-{
-	switch ( state )
-	{
-		case SwitchState.On:
-			return "Open! press x to close the space";
-		case SwitchState.Off:
-			return "Closed. press x to open the space"
-		case SwitchState.Unknown:
-			return "unknown state";
-		case SwitchState.Disabled:
-			return "Disabled (script not running)";
-	}
-}
-
-function ternaryToSwitchState( state:boolean|null ): SwitchState
-{
-	switch ( state )
-	{
-		case true:
-			return SwitchState.On;
-		case false:
-			return SwitchState.Off;
-		default:
-			return SwitchState.Unknown;
-	}
-}
-
-function setVirtualSpacestate( state:SwitchState )
-{
-	if ( switchId === null )
-	{
-		console.log( "no switch found" );
-		return;
-	}
-
-	const obj = gather_map_objects[ switchId ];
-	const oldstate = obj.customState as SwitchState;
-
-	if ( oldstate === state )
-		return;
-
-	if ( VERBOSE )
-		console.log( `set virtual spacestate (oldstate): ${state} (${oldstate})` );
-
-	const image = switchStateToImage( state );
-
-	game.engine.sendAction({
-		$case: "mapSetObjects",
-		mapSetObjects: {
-			mapId: MAP_ID,
-			objects: {
-				[switchId]: {
-					x: X,
-					y: Y,
-					normal: image,
-					highlighted: image,
-					customState: state as string,
-					previewMessage: switchStateToMessage( state ),
-					id: "spacestate",
-					_tags: [], // currently needed for this request to complete
-				},
-			},
-		},
-	});
-
-}
-
-function setRealSpacestate( state: SwitchState )
-{
-	console.log( `setting real state (forced): ${state}`)
-
-	// -2:closed
-	// -1:open
-	// 0: closed
-	// 1: open
-	const spacestate = switchStateToTernary( state );
-
-	// Trigger faux spacestate to enable override
-	https.get( `${SPACEAPI_URL}?key=${SPACEAPI_KEY}&update=state&state=${spacestate?0:1}` );
-	// Override space state
-	https.get( `${SPACEAPI_URL}?key=${SPACEAPI_KEY}&update=state&state=${spacestate?-1:-2}` );
-}
-
-async function getSpaceAPIstate(): Promise<SwitchState>
-{
-	return new Promise((resolve) => {
-		https.get(SPACEAPI_URL,(res) => {
-			let body = "";
-
-			res.on("data", (chunk) => {
-				body += chunk;
-			});
-
-			res.on("end", () => {
-				try {
-					const json = JSON.parse( body );
-					if ( VERBOSE )
-						console.log( `SpaceAPI spacestate: ${json.state.open}`)
-					resolve( ternaryToSwitchState( json.state.open ) );
-				} catch ( error: any )
-				{
-					console.error( error.message );
-					resolve( SwitchState.Unknown );
-				};
-			});
-
-		}).on("error", ( error: Error ) => {
-			console.error( error.message );
-			resolve( SwitchState.Unknown );
-		});
-	} );
-}
-
-// Read real spacestate every 10 seconds
-const intervalTimer = setInterval( async () => {
-	const state = await getSpaceAPIstate( );
-	setVirtualSpacestate( state );
-}, 10000 )
-
-// Object interaction
-game.subscribeToEvent("playerInteracts", (data, _context) => {
-	const objId = data.playerInteracts.objId;
-	const obj = findObject( objId );
-
-	if ( VERBOSE )
-	{
-		console.log( "interact event, id:", objId );
-		// invalid id?
-		if ( !objId )
-		{
-			console.log( "data", data );
-			console.log( "playerInteracts", data.playerInteracts );
-		}
-	}
-
-	// Note that the object id currently has no value to check for
-	if ( obj && ( "customState" in obj ) ) 
-	{
-		const state = invertState( obj.customState as SwitchState );
-		setVirtualSpacestate( state );
-		setRealSpacestate( state );
-	}
-	else if ( VERBOSE )
-	{
-		console.log( "object has no customState", obj );
-	}
-});
-
-// map-object data
-game.subscribeToEvent("mapSetObjects", (data, _context) =>
-{
-	if (data.mapSetObjects.mapId === MAP_ID )
-	{
-		gather_map_objects = data.mapSetObjects.objects;
-
-		let key:any;
-		for ( key in gather_map_objects )
-		{
-			const obj = gather_map_objects[ key ];
-			if ( "customState" in obj )
-				switchId = key;
-
-			// Show all objects in DEBUG mode
-			if ( DEBUG && VERBOSE )
-			{
-				console.log( obj );
-				console.log( "=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=" );
-			}
-
-		}
-
-		if ( !switchId )
-		{
-			console.log( "injecting spacestate switch" );
-
-			switchId = key + 1;
-			const spacestate = {
-				id: `${switchId}`,
-				height: 1,
-				width: 1,
-				distThreshold: 2,
-				x: X,
-				y: Y,
-				type: 5,
-				previewMessage: "press x to toggle space state",
-				normal: CLOSED,
-				highlighted: CLOSED,
-				customState: SwitchState.Unknown,
-				_tags: [], // currently needed for this request to complete
-			};
-			gather_map_objects[ switchId! ] = spacestate;
-
-
-			game.engine.sendAction({
-				$case: "mapSetObjects",
-				mapSetObjects: {
-					mapId: MAP_ID,
-					objects: data.mapSetObjects.objects
-				},
-			});
-		}
-		else
-		{
-			if ( VERBOSE )
-				console.log( `switch id found (state): ${switchId} (${gather_map_objects[switchId].customState})` );
-			if ( DEBUG )
-				console.log( gather_map_objects[switchId] );
-
-		}
-	}
-
-} );
-
-// initialize
-setTimeout( () => {
 	if ( DEBUG )
 		console.log( "DEBUG mode");
 	if ( VERBOSE )
 		console.log( "VERBOSE mode");
 
 	console.log("initializing.. press ctrl+c to stop this script");
-	game.engine.sendAction({
-		$case: "setName",
-		setName: {
-			name: "NPC:spacestate",
-		},
-	});
-	// Set unknown spacestate
-	setVirtualSpacestate( SwitchState.Unknown );
-}, 2000 ); // wait two seconds before setting these just to give the game a chance to init
 
+	if ( SPACEAPI )
+	{
+		// Register events
+		spacestate.on( "objectRegister", objectRegister );
+		spacestate.on( "objectChanged", objectChanged );
+		spacestate.on( "objectRemove", objectRemove );
+	}
+
+} )();
+
+game.connect( SPACE_ID );
+game.subscribeToConnection( (connected) => {
+	if ( VERBOSE )
+		console.log( `connected: ${connected}` );
+
+	// TODO: Generate the name from the active modules (or set a generic name)
+	if ( CHANGE_NAME )
+	{
+		if ( READONLY )
+		{
+			console.log( "readonly Gather:setName", "NPC:spacestate" );
+		}
+		else
+		{
+			if ( VERBOSE )
+				console.log( "setting name" );
+			game.engine.sendAction( {
+				$case: "setName",
+				setName: {
+					name: "NPC:spacestate",
+				},
+			} );
+		}
+	}
+
+	if ( SPACEAPI )
+	{
+		spacestate.init();
+	}
+
+} );
+
+interface RoomObjects { [key: number]: WireObject }
+
+const roomObjects: { [room: string]: RoomObjects } = {};
+const mutexRooms: { [room: string]: Promise<boolean> } = {};
+const mutexResolvers: { [room: string]: Function } = {};
+const subscribers: { [id: string]: { subscriber: EventObject, key: number } } = {};
+
+async function getMutex( _room: string, _timeout: number|undefined ): Promise<boolean>
+{
+	if ( _room in mutexRooms )
+	{
+		// Resolved, return true
+		return true;
+	}
+	else
+	{
+		const mutexResolver = new Promise<boolean>( resolve =>
+		{
+			// Assign resolver function
+			mutexResolvers[ _room ] = resolve;
+		} );
+
+		// Unresolved, return a promise that can be resolved by the data event handler
+		if ( _timeout )
+		{
+			// Race condition between mutex resolver and timout
+			mutexRooms[ _room ] = Promise.race( [ mutexResolver, timeout( _timeout, false ) ] );
+		}
+		else
+		{
+			mutexRooms[ _room ] = mutexResolver;
+		}
+
+		return mutexRooms[ _room ];
+	}
+}
+
+/** This function tries to return room objects within 5 seconds (or earlier)
+ *  it tries to read a mutex which is already "released" or set (together with a resolver)
+ *  for the `mapSetObjects` event to resolve after it has assigned its (new) data
+ */
+async function getRoomObjects( _room: string ): Promise<RoomObjects>
+{
+	const hasRoom = await getMutex( _room, 5000 );
+
+	if ( hasRoom )
+		return roomObjects[ _room ];
+	else
+		return {} as RoomObjects;
+}
+
+
+function getNewKey( _roomObjects: RoomObjects ):number
+{
+	let newKey = -1;
+	Object.keys( _roomObjects ).forEach( strkey =>
+	{
+		const key = parseInt( strkey );
+		if ( key > newKey )
+			newKey = key;
+	} );
+	return ++newKey;
+}
+
+function getObjectKey( _roomObjects: RoomObjects, _objId: string ):number|null
+{
+	// I guess the objects are a sparse array,
+	// so we have the downsides of an object
+	// and the downsides of an array
+	const key = Object.keys( _roomObjects ).find( ( key ) => {
+		const currentObject = _roomObjects[ parseInt( key ) ];
+
+		if ( key === _objId )
+			console.warn( "found index as id, this is unexpected" );
+
+		return currentObject.id === _objId;
+	} ) || null;
+
+	if ( VERBOSE )
+	{
+		if ( key )
+		{
+			console.log( `found key ${key} for id ${_objId}` );
+			if ( DEBUG )
+				console.log( "objects", _roomObjects[ parseInt( key ) ] );
+		}
+		else
+		{
+			console.log( `id not found: "${_objId}"` );
+		}
+	}
+
+	return key ? parseInt( key ) : null;
+}
+
+function findObject( _roomObjects: RoomObjects, _objId: string ):WireObject|null
+{
+	const key = getObjectKey( _roomObjects, _objId );
+	return key ? _roomObjects[ key ] : null;
+}
+
+// Object interaction
+game.subscribeToEvent( "playerInteracts", (data, _context) => {
+	const id = data.playerInteracts.objId;
+
+	if ( VERBOSE )
+		console.log( `interact: ${id}` );
+
+	// Lookup object reference and interact
+	if ( subscribers[ id ] )
+		subscribers[ id ].subscriber.objectInteract( id );
+	else
+		console.warn( `Interact: no subscription for id ${id}` )
+} );
+
+// Object data from room (map)
+game.subscribeToEvent( "mapSetObjects", (data, _context) =>
+{
+	// Lookup object references (per MAP_ID) and delegate
+	const room = data.mapSetObjects.mapId;
+
+	// Update room data
+	const roomlength = roomObjects[ room ] && Object.keys(roomObjects[ room ]).length;
+	const initialCall = !roomObjects[ room ];
+
+	roomObjects[ room ] = Object.assign( {}, roomObjects[ room ], data.mapSetObjects.objects );
+	if ( VERBOSE )
+		console.log( `TODO: object count (${room} / ${roomlength}): ${Object.keys(data.mapSetObjects.objects).length}` );
+
+	if ( data.mapSetObjects.mapId in mutexResolvers )
+	{
+		if ( VERBOSE )
+			console.log( `resolving mutex for room ${room}` )
+
+		mutexResolvers[ room ]( true );
+	}
+	else
+	{
+		if ( VERBOSE )
+			console.log( `dummy resolve mutex for room ${room}` )
+
+		mutexResolvers[ room ] = () => { console.log( "dummy mutex resolve" ) };
+		mutexRooms[ room ] = Promise.resolve( true );
+	}
+
+	// Iterate all objects and handle object subscription
+	Object.keys( roomObjects[ room ] ).find( ( key ) =>
+	{
+		const currentObject = roomObjects[ room ][ parseInt( key ) ];
+		if ( currentObject.id && subscribers[ currentObject.id ] )
+		{
+			if ( VERBOSE )
+				console.log( `calling setObject for identifier ${currentObject.id}` );
+			subscribers[ currentObject.id ].subscriber.setObject( currentObject, initialCall );
+		}
+	} );
+
+} );
+
+/**
+ * timeout promise
+ * @param delay amount of milliseconds to wait before timeout
+ * @param data the data of which the timeout will resolve to (for example `false` for comnnected timeout)
+ * @returns a promise that will resolve to `data` provided as parameter
+ */
+async function timeout<T>( delay:number, data:T ): Promise<T>
+{
+	return new Promise( (resolve) =>
+	{
+		setTimeout( resolve.bind( null, data ), delay );
+	} );
+}
+
+async function objectRegister( data: { source: EventObject, room: string, id: string, create: boolean } )
+{
+	// Register reference to this object from caller
+	console.log( `Object register for "${data.id}" (${data.create}) at ${data.room}` )
+
+	const objects = await getRoomObjects( data.room );
+	let key = getObjectKey( objects, data.id );
+
+	if ( key !== null )
+	{
+		data.source.setObject( objects[ key ], true );
+	}
+	else if ( data.create )
+	{
+		// Not found and source wants it? Let it create one for us
+		key = getNewKey( objects );
+
+		// NOTE: Trigger object change after `source` is a valid subscriber
+	}
+
+	// Store reference (currently only one per object)
+	// NOTE: if the object appears later, the source will not receive updates
+	if ( key )
+	{
+		subscribers[ data.id ] = { subscriber: data.source, key: key };
+
+		// Trigger object change which fetches the object from `source` and updates the room
+		if ( data.create )
+			objectChanged( data );
+	}
+}
+
+function objectChanged( data: { source: EventObject, room: string, id: string, create: boolean } )
+{
+	// Register reference to this object from caller
+	if ( VERBOSE )
+		console.log( "object changed", data.room, data.id )
+
+	// TODO: /!\ getMutex will most likely not synchronize objectRegister reliably
+
+	// Verify subscription
+	if ( !subscribers[ data.id ] )
+	{
+		console.warn( `Changed: no subscription for id "${data.id}"` );
+		return;
+	}
+
+	const subscription = subscribers[ data.id ];
+
+	if ( subscription.subscriber !== data.source )
+	{
+		console.warn( `Changed: source not subscribed on id "${data.id}"` );
+		return;
+	}
+
+	const object = data.source.getObject( data.id, data.create );
+
+	if ( VERBOSE )
+		console.log( `set room object for key ${subscription.key}:`, object );
+
+	// Update gather
+	if ( !READONLY )
+	{
+		// Sanity check
+		if ( object )
+		{
+			// TODO: https://github.com/ACKspace/gather-spaceapi/issues/3: queue objects per room if a timeout has not elapsed (<15fps)
+			game.engine.sendAction(
+			{
+				$case: "mapSetObjects",
+				mapSetObjects: {
+					mapId: data.room,
+					objects: {
+						[ subscription.key ]: object
+					},
+				},
+			} );
+		}
+	}
+	else
+	{
+		console.log( "readonly Gather:mapSetObjects", data.room, subscription.key, object );
+	}
+
+}
+
+function objectRemove( data: { source: EventObject, room: string, id: string } )
+{
+	// Verify subscription
+	if ( !subscribers[ data.id ] )
+	{
+		console.warn( `Remove: no subscription for id ${data.id}` );
+		return;
+	}
+
+	const subscription = subscribers[ data.id ];
+
+	if ( subscription.subscriber !== data.source )
+	{
+		console.warn( `Remove: source not subscribed on id ${data.id}` );
+		return;
+	}
+
+	// TODO: verify remove object
+	console.log( "TODO: verify remove object (room,id,key)", data.room, data.id, subscription.key );
+
+	// Update gather
+	if ( !READONLY )
+	{
+		game.engine.sendAction(
+		{
+			$case: "mapDeleteObject",
+			mapDeleteObject: {
+				mapId: data.room,
+				key: subscription.key
+			},
+		} );
+	}
+	else
+	{
+		console.log( "readonly Gather:mapDeleteObject", data.room, subscription.key );
+	}
+}
 
 // Press ctrl+c to exit the script (and cleanup)
-process.on('SIGINT', function()
+process.on( "SIGINT", function()
 {
     console.log("Caught interrupt signal; cleaning up");
-	// Stop the timer and update the switch first
-	clearInterval( intervalTimer );
-	setVirtualSpacestate( SwitchState.Disabled );
 
+	spacestate.destroy();
 
-	game.engine.sendAction({
-		$case: "setName",
-		setName: {
-			name: "xopr",
-		},
-	});
+	if ( CHANGE_NAME )
+	{
+		if ( READONLY )
+		{
+			console.log( "readonly Gather:setName", "xopr" );
+		}
+		else
+		{
+			if ( VERBOSE )
+				console.log( "restoring name" );
 
-	// Trigger faux spacestate to release override
-	// assume the real switch is closed, 
-	https.get( `${SPACEAPI_URL}?key=${SPACEAPI_KEY}&update=state&state=1` );	
+			// Restore name
+			game.engine.sendAction( {
+				$case: "setName",
+				setName: {
+					name: "xopr",
+				},
+			} );
+		}
+	}
 
 	process.exit();
-});
+} );
+
+
+
+/*
+enum ServerClientEvent
+{
+	Info = "info",
+	Warn = "warn",
+	Error = "error",
+	Ready = "ready",
+	ServerHeartbeat = "serverHeartbeat",
+	PlayerMoves = "playerMoves",
+	PlayerSetsStatus = "playerSetsStatus",
+	PlayerSpotlights = "playerSpotlights",
+	PlayerRings = "playerRings",
+	PlayerChats = "playerChats",
+	PlayerInteracts = "playerInteracts",
+	PlayerGhosts = "playerGhosts",
+	PlayerLeavesWhisper = "playerLeavesWhisper", // deprected?
+	PlayerActivelySpeaks = "playerActivelySpeaks",
+	PlayerSetsEmote = "playerSetsEmote",
+	PlayerSetsWorkCondition = "playerSetsWorkCondition",
+	PlayerSetsName = "playerSetsName",
+	PlayerSetsTextStatus = "playerSetsTextStatus",
+	PlayerSetsEmojiStatus = "playerSetsEmojiStatus",
+	PlayerSetsAffiliation = "playerSetsAffiliation",
+	PlayerExits = "playerExits",
+	PlayerSetsSprite = "playerSetsSprite",
+	PlayerSetsOutfitString = "playerSetsOutfitString",
+	PlayerSetsIsSignedIn = "playerSetsIsSignedIn",
+	SpaceOverwrites = "spaceOverwrites",
+	SpaceIsClosed = "spaceIsClosed",
+	PlayerEntersPortal = "playerEntersPortal",
+	SpaceSetsIdMapping = "spaceSetsIdMapping",
+	PlayerSetsLastActive = "playerSetsLastActive", // experimental
+	PlayerShootsConfetti = "playerShootsConfetti", // experimental
+	PlayerSetsEventStatus = "playerSetsEventStatus", // experimental
+	PlayerSetsInConversation = "playerSetsInConversation", // experimental
+	PlayerSetsCurrentDesk = "playerSetsCurrentDesk", // experimental
+	PlayerSetsCurrentArea = "playerSetsCurrentArea", // experimental
+	PlayerSetsImagePointer = "playerSetsImagePointer",
+	CookieFound = "cookieFound", // experimental
+	PlayerEntersWhisperV2 = "playerEntersWhisperV2",
+	PlayerSetsGoKartId = "playerSetsGoKartId", // experimental
+	MapSetDimensions = "mapSetDimensions",
+	MapSetCollisions = "mapSetCollisions",
+	MapSetBackgroundImagePath = "mapSetBackgroundImagePath",
+	MapSetForegroundImagePath = "mapSetForegroundImagePath",
+	MapSetSprites = "mapSetSprites",
+	MapSetSpaces = "mapSetSpaces",
+	MapSetSpawns = "mapSetSpawns",
+	MapSetPortals = "mapSetPortals",
+	MapSetAnnouncer = "mapSetAnnouncer",
+	MapSetAudio = "mapSetAudio",
+	MapSetAnimations = "mapSetAnimations",
+	MapSetAssets = "mapSetAssets",
+	MapSetObjects = "mapSetObjects",
+	MapSetName = "mapSetName",
+	MapSetDefaultChat = "mapSetDefaultChat",
+	MapSetMuteOnEntry = "mapSetMuteOnEntry",
+	MapSetUseDrawnBG = "mapSetUseDrawnBG",
+	MapSetWalls = "mapSetWalls",
+	MapSetFloors = "mapSetFloors",
+	MapSetAreas = "mapSetAreas",
+	MapDeleteObject = "mapDeleteObject",
+	PlayerSetsIsAlone = "playerSetsIsAlone", // experimental
+	PlayerJoins = "playerJoins",
+	MapSetEnabledChats = "mapSetEnabledChats",
+	MapSetDescription = "mapSetDescription",
+	MapSetDecoration = "mapSetDecoration",
+	MapSetTutorialTasks = "mapSetTutorialTasks",
+	MapSetMiniMapImagePath = "mapSetMiniMapImagePath"
+}
+  
+enum ClientServerAction
+{
+	ClientHeartbeat = "clientHeartbeat",
+	ClientBackupHeartbeat = "clientBackupHeartbeat",
+	UpdateSubscriptions = "updateSubscriptions",
+	Move = "move",
+	SetSprite = "setSprite",
+	SetAffiliation = "setAffiliation",
+	SetStatus = "setStatus",
+	Spotlight = "spotlight",
+	Ring = "ring",
+	Ban = "ban",
+	Kick = "kick",
+	Chat = "chat",
+	Interact = "interact",
+	EnterWhisper = "enterWhisper",
+	LeaveWhisper = "leaveWhisper",
+	SetEmojiStatus = "setEmojiStatus",
+	ActivelySpeaking = "activelySpeaking",
+	SetEmote = "setEmote",
+	SetName = "setName",
+	SetTextStatus = "setTextStatus",
+	Teleport = "teleport",
+	Exit = "exit",
+	Enter = "enter",
+	SetWorkCondition = "setWorkCondition",
+	Respawn = "respawn",
+	Spawn = "spawn",
+	Ghost = "ghost",
+	Init = "init",
+	SetOutfitString = "setOutfitString",
+	ShootConfetti = "shootConfetti", // experimental
+	SetEventStatus = "setEventStatus", // experimental
+	SetInConversation = "setInConversation", // experimental
+	SetCurrentDesk = "setCurrentDesk", // experimental
+	SetCurrentArea = "setCurrentArea", // experimental
+	SetImagePointer = "setImagePointer",
+	SetGoKartId = "setGoKartId", // experimental
+	MapSetDimensions = "mapSetDimensions",
+	MapSetCollisions = "mapSetCollisions",
+	MapSetBackgroundImagePath = "mapSetBackgroundImagePath",
+	MapSetForegroundImagePath = "mapSetForegroundImagePath",
+	MapSetSprites = "mapSetSprites",
+	MapSetSpawns = "mapSetSpawns",
+	MapSetSpaces = "mapSetSpaces",
+	MapSetPortals = "mapSetPortals",
+	MapSetAnnouncer = "mapSetAnnouncer",
+	MapSetObjects = "mapSetObjects",
+	MapSetName = "mapSetName",
+	MapSetDefaultChat = "mapSetDefaultChat",
+	MapSetMuteOnEntry = "mapSetMuteOnEntry",
+	MapSetUseDrawnBG = "mapSetUseDrawnBG",
+	MapSetWalls = "mapSetWalls",
+	MapSetFloors = "mapSetFloors",
+	MapSetAreas = "mapSetAreas", // experimental
+	MapAddObject = "mapAddObject",
+	MapDeleteObject = "mapDeleteObject",
+	SetIsAlone = "setIsAlone", // experimental
+	MapSetMiniMapImagePath = "mapSetMiniMapImagePath",
+	MapSetEnabledChats = "mapSetEnabledChats",
+	MapSetDescription = "mapSetDescription",
+	MapSetDecoration = "mapSetDecoration",
+	MapSetTutorialTasks = "mapSetTutorialTasks"
+}
+*/
