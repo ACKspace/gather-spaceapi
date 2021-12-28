@@ -51,7 +51,7 @@ export class Spacestate extends EventObject
         }, 10000 );
     }
 
-    public getObject( _full: boolean): WireObject
+    public getObject( id: string, _full: boolean): WireObject
     {
         // Create object and return it
         const image = this.switchStateToImage( this.state );

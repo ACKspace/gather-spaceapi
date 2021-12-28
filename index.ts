@@ -300,7 +300,7 @@ function objectChanged( data: { source: EventObject, room: string, id: string, c
 		return;
 	}
 
-	const object = data.source.getObject( data.create );
+	const object = data.source.getObject( data.id, data.create );
 
 	if ( VERBOSE )
 		console.log( `set room object for key ${subscription.key}:`, object );
@@ -311,6 +311,7 @@ function objectChanged( data: { source: EventObject, room: string, id: string, c
 		// Sanity check
 		if ( object )
 		{
+			// TODO: https://github.com/ACKspace/gather-spaceapi/issues/3: queue objects per room if a timeout has not elapsed (<15fps)
 			game.engine.sendAction(
 			{
 				$case: "mapSetObjects",
