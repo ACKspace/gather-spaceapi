@@ -73,7 +73,7 @@ export class MqttBridge extends EventObject
         } )
     }
 
-    public getObject( /*id: string, */_full: boolean): WireObject
+    public getObject( id: string, _full: boolean): WireObject
     {
         console.log( "getobject:", this.state );
 
@@ -104,7 +104,7 @@ export class MqttBridge extends EventObject
         return object as WireObject;
     }
 
-    public setObject( /*id: string, */_object: WireObject, initialCall: boolean ): void
+    public setObject( _object: WireObject, initialCall: boolean ): void
     {
         // We're ignorant and don't do anything with the gather object that we get;
         // everything is MQTT-centric
@@ -126,7 +126,7 @@ export class MqttBridge extends EventObject
 
     public destroy()
     {
-        this.mqttClient!.end();
+        this.mqttClient?.end();
 
         // Remove our object
         this.emit( "objectRemove", { source: this, room: MAP_ID, id: OBJECT_ID } );
