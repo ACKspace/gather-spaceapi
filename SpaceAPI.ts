@@ -2,8 +2,8 @@ const MAP_ID = "custom-entrance";
 const X = 30;
 const Y = 25;
 
-const OPEN = "https://ackspace.nl/spaceAPI/ministate_open.png";
-const CLOSED = "https://ackspace.nl/spaceAPI/ministate_closed.png";
+const OPEN_URL = "https://ackspace.nl/spaceAPI/ministate_open.png";
+const CLOSED_URL = "https://ackspace.nl/spaceAPI/ministate_closed.png";
 const SPACEAPI_URL = "https://ackspace.nl/spaceAPI/";
 
 import { SPACEAPI_KEY } from "./api-key";
@@ -13,6 +13,12 @@ import { WireObject } from "@gathertown/gather-game-client";
 
 // Flags: module feature disable options
 const SPACESTATE = !process.argv.includes( "--nospacestate" );
+
+
+const CLOSED_LOCKED = -2;
+const OPEN_LOCKED = -1;
+const CLOSED = 0;
+const OPEN = 1;
 
 // Please note that the `customState` seemed to return lower case string; keep the enum lowercase for compatibility
 enum SwitchState
@@ -98,8 +104,6 @@ export class Spacestate extends EventObject
         //if ( this.state === SwitchState.Unknown )
         if ( initialCall )
             this.initSpaceAPI();
-        else
-            this.setRealSpacestate( state );
     }
 
     public objectInteract( id: string ): boolean
@@ -178,9 +182,9 @@ export class Spacestate extends EventObject
         switch ( state )
         {
             case SwitchState.On:
-                return OPEN;
+                return OPEN_URL;
             default:
-                return CLOSED
+                return CLOSED_URL;
         }
     }
 
@@ -224,20 +228,26 @@ export class Spacestate extends EventObject
 
     private setRealSpacestate( state: SwitchState )
     {
-        console.log( `setting real state (forced): ${state}`)
+        console.log( `setting real state (forced): ${state}`);
 
-        // -2:closed
-        // -1:open
-        // 0: closed
-        // 1: open
+        // NOTE: the override mechanism only works when the current spacestate has the opposite state:
+        // i.e.: when the switch emits "on" every 20 seconds, setting the override to off will lock it in its "off" position.
+        //       after the switch has been turned to its equal (non-locked) state (off), the lock will "release" and normal operation can continue
+        //       This is also the case when the state was locked to either value: locked off needs an on-trigger before it can be locked at its on position 
+
+        // Since we really don't know what state it is (on, off, forced-on, forced-off), we emit a faux inverse to release any lock and lock it in place again with the desired state.
+
         const spacestate = this.switchStateToTernary( state );
-
+       
         if ( SPACESTATE )
         {
             // Trigger faux spacestate to enable override
-            https.get( `${SPACEAPI_URL}?key=${SPACEAPI_KEY}&update=state&state=${spacestate?0:1}` );
-            // Override space state
-            https.get( `${SPACEAPI_URL}?key=${SPACEAPI_KEY}&update=state&state=${spacestate?-1:-2}` );
+            https.get( `${SPACEAPI_URL}?key=${SPACEAPI_KEY}&update=state&state=${spacestate ? CLOSED : OPEN}`, (res) => {
+                res.on("end", () => {
+                    // Override space state (only after the first request has completed)
+                    https.get( `${SPACEAPI_URL}?key=${SPACEAPI_KEY}&update=state&state=${spacestate ? OPEN_LOCKED : CLOSED_LOCKED}` );
+                });
+            } );
         }
     }
 
