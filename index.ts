@@ -5,6 +5,7 @@ import { Game, WireObject } from "@gathertown/gather-game-client";
 
 import { EventObject } from "./EventObject";
 import { Spacestate } from "./SpaceAPI";
+import { MqttBridge } from "./MqttBridge";
 
 global.WebSocket = require("isomorphic-ws");
 
@@ -15,9 +16,11 @@ const VERBOSE = process.argv.includes( "--verbose" );			// verbose console outpu
 const READONLY = process.argv.includes( "--readonly" );			// "readonly" gather connection
 const SPACEAPI = !process.argv.includes( "--nospaceapi" );  	// don't initialize SpaceAPI module
 const CHANGE_NAME = !process.argv.includes( "--nonamechange" ); // don't touch our nickname
+const MQTT = !process.argv.includes( "--nomqtt" );
 
 const game = new Game( () => Promise.resolve( { apiKey: API_KEY } ) );
 const spacestate = new Spacestate();
+const mqttBridge = new MqttBridge();
 
 // Program initialization
 ( () => {
@@ -36,6 +39,14 @@ const spacestate = new Spacestate();
 		spacestate.on( "objectRegister", objectRegister );
 		spacestate.on( "objectChanged", objectChanged );
 		spacestate.on( "objectRemove", objectRemove );
+	}
+
+	if ( MQTT )
+	{
+		mqttBridge.on( "objectRegister", objectRegister );
+		mqttBridge.on( "objectChanged", objectChanged );
+		mqttBridge.on( "objectRemove", objectRemove );
+
 	}
 
 } )();
@@ -66,9 +77,11 @@ game.subscribeToConnection( (connected) => {
 	}
 
 	if ( SPACEAPI )
-	{
 		spacestate.init();
-	}
+
+	if ( MQTT )
+		mqttBridge.init();
+
 
 } );
 
@@ -374,6 +387,7 @@ process.on( "SIGINT", function()
     console.log("Caught interrupt signal; cleaning up");
 
 	spacestate.destroy();
+	mqttBridge.destroy();
 
 	if ( CHANGE_NAME )
 	{
