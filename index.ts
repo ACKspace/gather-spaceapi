@@ -16,10 +16,12 @@ const addModule = ( module: any, param: string ) => {
 // Step 1: Import modules here
 import { Spacestate } from "./SpaceAPI";
 import { MqttBridge } from "./MqttBridge";
+import { Carillon } from "./Karel";
 
 // Step 2: Add the module with its feature disable parameter
 addModule( Spacestate, "--nospaceapi" );
 addModule( MqttBridge, "--nomqtt" );
+addModule( Carillon, "--nocarillon" );
 
 // Flags
 const DEBUG = process.argv.includes( "--debug" );				// debug setting (object printing and feature testing)
