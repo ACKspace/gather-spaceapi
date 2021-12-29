@@ -1,7 +1,7 @@
 const SPACE_ID = "iVeuxmC1wz9bpz3p\\ACKspace";
 
 import { API_KEY } from "./api-key";
-import { Game, WireObject } from "@gathertown/gather-game-client";
+import { Game, WireObject, ClientServerActionAction, MapSetObjects, MapDeleteObject, SetName } from "@gathertown/gather-game-client";
 
 import { EventObject } from "./EventObject";
 import { Spacestate } from "./SpaceAPI";
@@ -21,6 +21,9 @@ const MQTT = !process.argv.includes( "--nomqtt" );
 const game = new Game( () => Promise.resolve( { apiKey: API_KEY } ) );
 const spacestate = new Spacestate();
 const mqttBridge = new MqttBridge();
+
+const engineQueue: Array<ClientServerActionAction> = [];
+let mapQueueTimer: NodeJS.Timer|undefined;
 
 // Program initialization
 ( () => {
@@ -46,7 +49,6 @@ const mqttBridge = new MqttBridge();
 		mqttBridge.on( "objectRegister", objectRegister );
 		mqttBridge.on( "objectChanged", objectChanged );
 		mqttBridge.on( "objectRemove", objectRemove );
-
 	}
 
 } )();
@@ -67,12 +69,12 @@ game.subscribeToConnection( (connected) => {
 		{
 			if ( VERBOSE )
 				console.log( "setting name" );
-			game.engine.sendAction( {
-				$case: "setName",
-				setName: {
-					name: "NPC:spacestate",
-				},
-			} );
+				sendMapAction( {
+					$case: "setName",
+					setName: {
+						name: "NPC:spacestate",
+					},
+				} );
 		}
 	}
 
@@ -330,9 +332,7 @@ function objectChanged( data: { source: EventObject, room: string, id: string, c
 		// Sanity check
 		if ( object )
 		{
-			// TODO: https://github.com/ACKspace/gather-spaceapi/issues/3: queue objects per room if a timeout has not elapsed (<15fps)
-			game.engine.sendAction(
-			{
+			sendMapAction( {
 				$case: "mapSetObjects",
 				mapSetObjects: {
 					mapId: data.room,
@@ -349,6 +349,124 @@ function objectChanged( data: { source: EventObject, room: string, id: string, c
 	}
 
 }
+
+function sendMapAction( action: ClientServerActionAction )
+{
+	if ( mapQueueTimer )
+	{
+		// Add to queue
+		console.log( `queued action: ${action.$case}` );
+		engineQueue.push( action )
+	}
+	else
+	{
+		if ( DEBUG )
+			console.log( `direct action call: ${action.$case}` );
+
+			// TODO: find a cleaner way to exit
+			if ( action.$case === "exit" )
+				process.exit( );
+			else
+				game.engine.sendAction( action );
+
+		// Set a "timeout" for upcoming object changes so we can roll them up in one frame
+		mapQueueTimer = setInterval( handleMapObjectQueue, 1000 / 1.5 );
+	}
+}
+
+function handleMapObjectQueue()
+{
+	// Iterate array and combine objects of the same room
+	if ( !engineQueue.length )
+	{
+		if ( DEBUG )
+			console.log( "action queue empty" );
+		if ( mapQueueTimer )
+			clearInterval( mapQueueTimer );
+		mapQueueTimer = undefined; // TODO: make this prettier
+	}
+	else
+	{
+		// Iterate queue
+		for ( let n = 1; n < engineQueue.length; )
+		{
+			// Compare and splice magic
+			if ( compareActionDeleteCurrent( engineQueue[ 0 ], engineQueue[ n ] ) )
+				engineQueue.splice( n, 1 );
+			else
+				n++;
+		}
+
+		// Execute our combined object
+		if ( DEBUG )
+			console.log( `queued action call: ${engineQueue[ 0 ].$case}` );
+
+		// TODO: find a cleaner way to exit
+		if ( engineQueue[ 0 ].$case === "exit" )
+			process.exit( );
+		else
+			game.engine.sendAction( engineQueue.splice( 0, 1 )[ 0 ] );
+	}
+}
+
+function compareActionDeleteCurrent( action1: ClientServerActionAction, action2: ClientServerActionAction ): boolean
+{
+	// Different actions?
+	if ( action1.$case !== action2.$case )
+		return false;
+
+	switch ( action1.$case )
+	{
+		case "mapSetObjects":
+			const setObjects1 = action1.mapSetObjects;
+			// The transcompiler has no way to assert we're working with the same types, so force it this way:
+			const setObjects2 = (action2 as any).mapSetObjects as MapSetObjects;
+
+			// Different room (map)?
+			if ( setObjects1.mapId !== setObjects2.mapId )
+				return false;
+
+			// Copy over latter objects to former
+			// TODO: check if assignment works
+			Object.keys( setObjects2.objects ).forEach( key => {
+				const nKey = parseInt( key );
+				setObjects1.objects[ nKey ] = setObjects2.objects[ nKey ];
+			} );
+
+			// Objects migrated: remove the latter from the list
+			return true;
+
+		case "mapDeleteObject":
+			const deleteObject1 = action1.mapDeleteObject;
+			// The transcompiler has no way to assert we're working with the same types, so force it this way:
+			const deleteObject2 = (action2 as any).mapDeleteObject as MapDeleteObject;
+
+			// Different room (map)?
+			if ( deleteObject1.mapId !== deleteObject2.mapId )
+				return false;
+
+			// Different key?
+			if ( deleteObject1.key !== deleteObject2.key )
+				return false;
+
+			// Identical delete: remove the latter from the list
+			return true;
+
+		case "setName":
+			const setName1 = action1.setName;
+			// The transcompiler has no way to assert we're working with the same types, so force it this way:
+			const setName2 = (action2 as any).setName as SetName;
+
+			// Overwrite name and remove the latter from the list
+			setName1.name = setName2.name;
+			// TODO: check if assignment works
+			// TODO: setName1.targetId?
+			return true;
+	}
+
+	return false;
+}
+
 
 function objectRemove( data: { source: EventObject, room: string, id: string } )
 {
@@ -373,8 +491,7 @@ function objectRemove( data: { source: EventObject, room: string, id: string } )
 	// Update gather
 	if ( !READONLY )
 	{
-		game.engine.sendAction(
-		{
+		sendMapAction( {
 			$case: "mapDeleteObject",
 			mapDeleteObject: {
 				mapId: data.room,
@@ -408,7 +525,7 @@ process.on( "SIGINT", function()
 				console.log( "restoring name" );
 
 			// Restore name
-			game.engine.sendAction( {
+			sendMapAction( {
 				$case: "setName",
 				setName: {
 					name: "xopr",
@@ -417,7 +534,8 @@ process.on( "SIGINT", function()
 		}
 	}
 
-	process.exit();
+	// TODO: find a cleaner way to exit
+	sendMapAction( { $case: "exit", exit: false } );
 } );
 
 
