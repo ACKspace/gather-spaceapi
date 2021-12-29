@@ -4,23 +4,30 @@ import { API_KEY } from "./api-key";
 import { Game, WireObject, ClientServerActionAction, MapSetObjects, MapDeleteObject, SetName } from "@gathertown/gather-game-client";
 
 import { EventObject } from "./EventObject";
+
+global.WebSocket = require("isomorphic-ws");
+
+const modules: EventObject[] = [];
+const addModule = ( module: any, param: string ) => {
+	if ( !process.argv.includes( param ) )
+		modules.push( new module() )
+};
+
+// Step 1: Import modules here
 import { Spacestate } from "./SpaceAPI";
 import { MqttBridge } from "./MqttBridge";
 
-global.WebSocket = require("isomorphic-ws");
+// Step 2: Add the module with its feature disable parameter
+addModule( Spacestate, "--nospaceapi" );
+addModule( MqttBridge, "--nomqtt" );
 
 // Flags
 const DEBUG = process.argv.includes( "--debug" );				// debug setting (object printing and feature testing)
 const VERBOSE = process.argv.includes( "--verbose" );			// verbose console output
-// Flags: feature disable options
 const READONLY = process.argv.includes( "--readonly" );			// "readonly" gather connection
-const SPACEAPI = !process.argv.includes( "--nospaceapi" );  	// don't initialize SpaceAPI module
 const CHANGE_NAME = !process.argv.includes( "--nonamechange" ); // don't touch our nickname
-const MQTT = !process.argv.includes( "--nomqtt" );
 
 const game = new Game( () => Promise.resolve( { apiKey: API_KEY } ) );
-const spacestate = new Spacestate();
-const mqttBridge = new MqttBridge();
 
 const engineQueue: Array<ClientServerActionAction> = [];
 let mapQueueTimer: NodeJS.Timer|undefined;
@@ -36,20 +43,12 @@ let mapQueueTimer: NodeJS.Timer|undefined;
 
 	console.log("initializing.. press ctrl+c to stop this script");
 
-	if ( SPACEAPI )
-	{
-		// Register events
-		spacestate.on( "objectRegister", objectRegister );
-		spacestate.on( "objectChanged", objectChanged );
-		spacestate.on( "objectRemove", objectRemove );
-	}
-
-	if ( MQTT )
-	{
-		mqttBridge.on( "objectRegister", objectRegister );
-		mqttBridge.on( "objectChanged", objectChanged );
-		mqttBridge.on( "objectRemove", objectRemove );
-	}
+	// Register events
+	modules.forEach( module => {
+		module.on( "objectRegister", objectRegister );
+		module.on( "objectChanged", objectChanged );
+		module.on( "objectRemove", objectRemove );
+	} );
 
 } )();
 
@@ -78,11 +77,9 @@ game.subscribeToConnection( (connected) => {
 		}
 	}
 
-	if ( SPACEAPI )
-		spacestate.init();
-
-	if ( MQTT )
-		mqttBridge.init();
+	modules.forEach( module => {
+		module.init();
+	} );
 } );
 
 interface RoomObjects { [key: number]: WireObject }
@@ -370,7 +367,7 @@ function sendMapAction( action: ClientServerActionAction )
 				game.engine.sendAction( action );
 
 		// Set a "timeout" for upcoming object changes so we can roll them up in one frame
-		mapQueueTimer = setInterval( handleMapObjectQueue, 1000 / 1.5 );
+		mapQueueTimer = setInterval( handleMapObjectQueue, 1000 / 15 );
 	}
 }
 
@@ -381,6 +378,10 @@ function handleMapObjectQueue()
 	{
 		if ( DEBUG )
 			console.log( "action queue empty" );
+		//!\ NOTE: you might need to
+		// change `function clearInterval(intervalId: NodeJS.Timeout): void;`
+		// into:  `function clearInterval(intervalId: NodeJS.Timer): void;`
+		// inside `node_modules/@types/node/timers.d.ts` since that was incorrect at xopr's repository
 		if ( mapQueueTimer )
 			clearInterval( mapQueueTimer );
 		mapQueueTimer = undefined; // TODO: make this prettier
@@ -510,8 +511,9 @@ process.on( "SIGINT", function()
 {
     console.log("Caught interrupt signal; cleaning up");
 
-	spacestate.destroy();
-	mqttBridge.destroy();
+	modules.forEach( module => {
+		module.destroy();
+	} );
 
 	if ( CHANGE_NAME )
 	{
