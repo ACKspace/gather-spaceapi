@@ -132,9 +132,9 @@ async function getRoomObjects( _room: string ): Promise<RoomObjects>
 }
 
 
+let newKey = -1;
 function getNewKey( _roomObjects: RoomObjects ):number
 {
-	let newKey = -1;
 	Object.keys( _roomObjects ).forEach( strkey =>
 	{
 		const key = parseInt( strkey );
@@ -350,7 +350,7 @@ function sendMapAction( action: ClientServerActionAction )
 	if ( mapQueueTimer )
 	{
 		// Add to queue
-		console.log( `queued action: ${action.$case}` );
+		console.log( `queued action: ${action.$case} (${action.$case === "mapDeleteObject" ? action.mapDeleteObject.key : ""})` );
 		engineQueue.push( action )
 	}
 	else
@@ -386,6 +386,10 @@ function handleMapObjectQueue()
 	}
 	else
 	{
+		// Sort delete object by key (high to low), because keys get reassigned
+		// https://github.com/ACKspace/gather-spaceapi/issues/7
+		engineQueue.sort( sortAction );
+
 		// Iterate queue
 		for ( let n = 1; n < engineQueue.length; )
 		{
@@ -406,6 +410,32 @@ function handleMapObjectQueue()
 		else
 			game.engine.sendAction( engineQueue.splice( 0, 1 )[ 0 ] );
 	}
+}
+
+function sortAction( action1: ClientServerActionAction, action2: ClientServerActionAction ): number
+{
+	// Exit last
+	if ( action1.$case === "exit" )
+		return 1;
+	if ( action2.$case === "exit" )
+		return -1;
+
+	// mapDeleteObject second to last
+	if ( action1.$case === "mapDeleteObject" && action1.$case !== action2.$case )
+		return 1;
+	if ( action2.$case === "mapDeleteObject" && action1.$case !== action2.$case )
+		return -1;
+
+	// High key (index) first
+	if ( action1.$case === "mapDeleteObject" && action1.$case === action2.$case )
+	{
+		if ( action1.mapDeleteObject.key > action2.mapDeleteObject.key )
+			return -1;
+		if ( action2.mapDeleteObject.key > action1.mapDeleteObject.key )
+			return 1;
+	}
+
+	return 0;
 }
 
 function compareActionDeleteCurrent( action1: ClientServerActionAction, action2: ClientServerActionAction ): boolean
@@ -449,6 +479,7 @@ function compareActionDeleteCurrent( action1: ClientServerActionAction, action2:
 				return false;
 
 			// Identical delete: remove the latter from the list
+			console.warn( `deleting key twice: ${deleteObject1.key}` );
 			return true;
 
 		case "setName":
@@ -484,8 +515,7 @@ function objectRemove( data: { source: EventObject, room: string, id: string } )
 		return;
 	}
 
-	// TODO: verify remove object
-	console.log( "TODO: verify remove object (room,id,key)", data.room, data.id, subscription.key );
+	//console.log( "TODO: verify remove object (room,id,key)", data.room, data.id, subscription.key );
 
 	// Update gather
 	if ( !READONLY )
