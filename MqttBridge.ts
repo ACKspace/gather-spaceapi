@@ -4,6 +4,34 @@ const Y = 28;
 
 const OPEN = "https://ackspace.nl/spaceAPI/ministate_open.png";
 const CLOSED = "https://ackspace.nl/spaceAPI/ministate_closed.png";
+
+const SWITCH_OFF = "https://ackspace.nl/spaceAPI/switch_off.png";
+const SWITCH_ON = "https://ackspace.nl/spaceAPI/switch_on.png";
+
+const SWITCH_BLACK = "https://ackspace.nl/spaceAPI/switch_black.png";
+const SWITCH_WHITE = "https://ackspace.nl/spaceAPI/switch_white.png";
+const SWITCH_RED = "https://ackspace.nl/spaceAPI/switch_red.png";
+const SWITCH_ORANGE = "https://ackspace.nl/spaceAPI/switch_orange.png";
+const SWITCH_YELLOW = "https://ackspace.nl/spaceAPI/switch_yellow.png";
+const SWITCH_GREEN = "https://ackspace.nl/spaceAPI/switch_green.png";
+const SWITCH_CYAN = "https://ackspace.nl/spaceAPI/switch_cyan.png";
+const SWITCH_BLUE = "https://ackspace.nl/spaceAPI/switch_blue.png";
+const SWITCH_PURPLE = "https://ackspace.nl/spaceAPI/switch_purple.png";
+const SWITCH_PINK = "https://ackspace.nl/spaceAPI/switch_pink.png";
+
+const COLORS = [
+    { img: SWITCH_BLACK,    x: 0.1,                 y: 0.1,                 msg: "Off. Press x to switch on" },
+    { img: SWITCH_WHITE,    x: 0.3125,              y: 0.32894736842105265, msg: "White. Press x to change color" },
+    { img: SWITCH_RED,      x: 0.6307692307692307,  y: 0.3230769230769231,  msg: "Red. Press x to change color" },
+    { img: SWITCH_ORANGE,   x: 0.49107142857142855, y: 0.42857142857142855, msg: "Orange. Press x to change color" },
+    { img: SWITCH_YELLOW,   x: 0.41847826086956524, y: 0.5054347826086957,  msg: "Yellow. Press x to change color" },
+    { img: SWITCH_GREEN,    x: 0.30578512396694213, y: 0.5950413223140496,  msg: "Green. Press x to change color" },
+    { img: SWITCH_CYAN,     x: 0.225,               y: 0.32916666666666666, msg: "Cyan. Press x to change color" },
+    { img: SWITCH_BLUE,     x: 0.14912280701754385, y: 0.06140350877192982, msg: "Blue. Press x to change color" },
+    { img: SWITCH_PURPLE,   x: 0.22758620689655173, y: 0.1103448275862069,  msg: "Purple. Press x to change color" },
+    { img: SWITCH_PINK,     x: 0.34146341463414637, y: 0.17073170731707318, msg: "Pink. Press x to witch off" }
+];
+
 const HOST = '192.168.83.50'
 const PORT = '1883'
 const CLIENTID = "gather";
@@ -20,31 +48,16 @@ import { WireObject } from "@gathertown/gather-game-client";
 // Flags: module feature disable options
 
 
-// Please note that the `customState` seemed to return lower case string; keep the enum lowercase for compatibility
-enum SwitchState
-{
-    On = "on",
-    Off = "off",
-    Unknown = "unknown",
-    Disabled = "disabled"
-}
-
-
 export class MqttBridge extends EventObject
 {
-    private state: SwitchState;
+    private colorIndex: number;
     private mqttClient: mqtt.MqttClient|undefined;
-    private xColor: number;
-    private yColor: number;
 
     constructor()
     {
         super();
 
-        this.state = SwitchState.Unknown;
-        // Pink-ish
-        this.xColor = 0.32065217391304346;
-        this.yColor = 0.15217391304347827;        
+        this.colorIndex = 0;
     }
 
     public init()
@@ -75,15 +88,14 @@ export class MqttBridge extends EventObject
 
     public getObject( id: string, _full: boolean): WireObject
     {
-        console.log( "getobject:", this.state );
-
         // Create object and return it
-        const image = this.switchStateToImage( this.state );
+        const image = COLORS[ this.colorIndex ].img;
+        const msg = COLORS[ this.colorIndex ].msg;
         const object = {
             normal: image,
             highlighted: image,
-            customState: this.state as string,
-            previewMessage: this.switchStateToMessage( this.state ),
+            customState: `${this.colorIndex}`,
+            previewMessage: msg,
             _tags: [], // currently needed for this request to complete
         };
 
@@ -115,10 +127,10 @@ export class MqttBridge extends EventObject
         if ( id !== OBJECT_ID )
             console.warn( `Expect id to be "${OBJECT_ID}" only` );
 
-        // We got an interact event: act accordingly (toggle the switch)
-        const state = this.toggleLight( this.state );
+        // We got an interact event: act accordingly (change the light)
+        const index = this.changeLight( this.colorIndex );
 
-		this.setRealState( state );
+		this.setRealState( index );
 
         // Interaction success, object changed 
         return true;
@@ -135,68 +147,33 @@ export class MqttBridge extends EventObject
     private onMqttMessage( topic: string, payload: Buffer ): void
     {
         const data = JSON.parse( payload.toString() );
-        this.state = (data.state?.toLowerCase()) as SwitchState;
+        // TODO: determine `this.colorIndex`
+        //this.colorIndex = ...
 
-        console.log( "state", this.state );
         this.emit( "objectChanged", { source: this, room: MAP_ID, id: OBJECT_ID } );
-        console.log( "emit done" );
     }
 
-    private toggleLight( state:SwitchState ): SwitchState
+    private changeLight( index: number ): number
     {
-        switch ( state )
-        {
-            case SwitchState.On:
-                // Random color
-                this.xColor = Math.random();
-                this.yColor = Math.random();
-                return SwitchState.On; // Don't turn off!
-            case SwitchState.Off:
-                return SwitchState.On;
-
-            // SwitchState.Disabled
-            // SwitchState.Unknown
-            default:
-                console.warn( "Unexpected: inverting from unknown or disabled state" )
-                return SwitchState.On;
-        }
+        if ( index < 0 )
+            return this.colorIndex = COLORS.length - 1;
+        else if ( index >= COLORS.length - 1 )
+            return this.colorIndex = 0;
+        else
+            return this.colorIndex = index + 1;
     }
 
-    private switchStateToImage( state:SwitchState ): string
-    {
-        switch ( state )
-        {
-            case SwitchState.On:
-                return OPEN;
-            default:
-                return CLOSED
-        }
-    }
-
-    private switchStateToMessage( state:SwitchState ): string
-    {
-        switch ( state )
-        {
-            case SwitchState.On:
-                return "On. press x to change color";
-            case SwitchState.Off:
-                return "Off. press x to switch on"
-            case SwitchState.Unknown:
-                return "unknown light state";
-            case SwitchState.Disabled:
-                return "Disabled (script not running)";
-        }
-    }
-
-    private setRealState( state: SwitchState )
+    private setRealState( index: number )
     {
         //{"brightness":254,"color":{"x":0.32065217391304346,"y":0.15217391304347827},"color_mode":"xy","linkquality":54,"power_on_behavior":"on","state":"OFF","update":{"state":"available"},"update_available":true}
         //{"state":"toggle","transition":0}
+
+        const state = index ? "ON": "OFF";
         const light = {
-            state: state.toUpperCase(),
+            state: state,
             color: {
-                x: this.xColor,
-                y: this.yColor
+                x: COLORS[ index ].x,
+                y: COLORS[ index ].y
             }
         };
 
