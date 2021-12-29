@@ -8,7 +8,7 @@ This information is gathered [pun intended] from the [Gather API](https://gather
 ## setup
 
 prerequisites
-* have NodeJS (12 or above) and npm installed
+* have NodeJS (12 or above) and npm installed (you will get a Textdecoder error if your version is too low)
 * copy over `ministate_closed.png`, `ministate_open.png` and (most likely) `htaccess` (as `.htaccess`) from the `resources` directory to the webserver (inside the spaceeAPI directory)
 
 run `npm install`
@@ -133,7 +133,3 @@ myInteractionObject.on( "objectRemove", objectRemove );
 Putting in your API key will make the bot join as you!
 IF you want to be able to join as yourself and have the bot going at the same time,
 just login with a different email and get an API key for that account, so you can use yours separately.
-
-## TODO
-
-* compartmentalize features that can be disabled with flags
